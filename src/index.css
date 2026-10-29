@@ -1,0 +1,1265 @@
+/*
+ * Palette follows the validated reference instance: categorical slots 1 and 2
+ * for the two routes, blue<->red diverging for the signed cost breakdown.
+ * Dark values are their own steps for the dark surface, not a flip.
+ */
+:root {
+  color-scheme: light;
+
+  /* Light mode borrows from a printed chart: cool paper, navy ink. */
+  --plane: #e8edf0;
+  --surface: #f4f7f8;
+  --surface-raised: #ffffff;
+  --ink: #15232d;
+  --ink-secondary: #485864;
+  --ink-muted: #75848f;
+  --grid: #dbe3e8;
+  --rule: #c2cdd4;
+  --border: rgba(21, 35, 45, 0.12);
+
+  --route-baseline: #2a78d6;
+  --route-alternative: #eb6834;
+  --adds-cost: #e34948;
+  --saves-cost: #2a78d6;
+  --status-good: #0ca30c;
+  --status-critical: #d03b3b;
+  --port-destination: #4a3aa7;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --font: 'Barlow', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --plane: #0d0d0d;
+    --surface: #1a1a19;
+    --surface-raised: #222221;
+    --ink: #ffffff;
+    --ink-secondary: #c3c2b7;
+    --ink-muted: #898781;
+    --grid: #2c2c2a;
+    --rule: #383835;
+    --border: rgba(255, 255, 255, 0.1);
+
+    --route-baseline: #3987e5;
+    --route-alternative: #d95926;
+    --adds-cost: #e66767;
+    --saves-cost: #3987e5;
+    --port-destination: #9085e9;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  background: var(--plane);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ── Shell ─────────────────────────────────────────────────────────────── */
+
+.app {
+  display: grid;
+  height: 100%;
+  grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) minmax(0, auto);
+  grid-template-areas:
+    'header header'
+    'controls map'
+    'controls results';
+  gap: 1px;
+  background: var(--border);
+}
+
+.app__header {
+  grid-area: header;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  padding: 12px 20px;
+  background: var(--surface);
+  min-width: 0;
+}
+
+.app__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.app__brand h1 {
+  font-size: 17px;
+}
+
+.app__brand p {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--ink-secondary);
+}
+
+.app__mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--route-baseline);
+  background: linear-gradient(
+    to bottom,
+    transparent 0 45%,
+    var(--route-alternative) 45% 55%,
+    transparent 55% 100%
+  );
+}
+
+.app__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.panel {
+  background: var(--surface);
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.panel--controls {
+  grid-area: controls;
+  padding: 16px 18px 32px;
+}
+
+.panel--results {
+  grid-area: results;
+  padding: 16px 20px 20px;
+  max-height: 40vh;
+  border-top: 1px solid var(--border);
+}
+
+.map {
+  grid-area: map;
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+  background: var(--surface);
+}
+
+.map__canvas {
+  width: 100%;
+  height: 100%;
+}
+
+/* Stock OSM colours compete with the routes; muted, the map recedes behind them. */
+.map__tiles--light {
+  filter: saturate(0.3) contrast(0.92) brightness(1.02);
+}
+
+/* OpenStreetMap has no dark style; inverted, land and sea keep their contrast. */
+.map__tiles--dark {
+  filter: invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.9);
+}
+
+/* A soft glow lifts the detour off the map without tilting it. */
+.route--alternative {
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--route-alternative) 60%, transparent));
+}
+
+/* The dash period is 15 px ('1 14'), so one cycle moves the dots by one gap. */
+.route-flow {
+  animation: route-flow 1.6s linear infinite;
+}
+
+@keyframes route-flow {
+  to {
+    stroke-dashoffset: -15;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-flow {
+    animation: none;
+  }
+}
+
+/* ── Forms ─────────────────────────────────────────────────────────────── */
+
+.field-group {
+  padding-block: 14px;
+  border-bottom: 1px solid var(--grid);
+}
+
+.field-group:last-child {
+  border-bottom: none;
+}
+
+.field-group > h2,
+.field-group__head h2 {
+  font-size: 11px;
+  letter-spacing: 0;
+  color: var(--ink-muted);
+  margin-bottom: 10px;
+}
+
+.field-group__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.field-group__actions {
+  display: flex;
+  gap: 6px;
+}
+
+.hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.field {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.field > span {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-secondary);
+  margin-bottom: 4px;
+}
+
+select,
+input[type='number'] {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+
+/* The native chevron ignores the palette; draw one in the ink colour instead. */
+select {
+  appearance: none;
+  padding-inline-end: 28px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ink-muted) 50%),
+    linear-gradient(135deg, var(--ink-muted) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+
+[dir='rtl'] select {
+  background-position: 10px 52%, 15px 52%;
+}
+
+select:focus-visible,
+input:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--route-baseline);
+  outline-offset: 1px;
+}
+
+.field--inline {
+  display: grid;
+  grid-template-columns: 1fr 110px;
+  align-items: center;
+  gap: 8px;
+}
+
+.field--inline > span:first-child {
+  margin-bottom: 0;
+}
+
+.field__input {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.field__input em {
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.check input {
+  margin-top: 2px;
+  accent-color: var(--route-baseline);
+}
+
+.check small {
+  display: block;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+
+.button {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--rule);
+  background: var(--surface-raised);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.button:hover {
+  border-color: var(--route-baseline);
+}
+
+.button--tiny {
+  font-size: 11.5px;
+  padding: 3px 8px;
+}
+
+.button--ghost {
+  background: transparent;
+}
+
+.button--swap {
+  width: 100%;
+  margin-bottom: 10px;
+  color: var(--ink-secondary);
+}
+
+/* ── Language switch ───────────────────────────────────────────────────── */
+
+.lang {
+  display: block;
+}
+
+.lang__select {
+  width: auto;
+  min-width: 8.5rem;
+  padding: 5px 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-secondary);
+}
+
+/* ── Scenarios ─────────────────────────────────────────────────────────── */
+
+.scenarios {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.scenario {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  font: inherit;
+  text-align: start;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.scenario:hover {
+  border-color: var(--route-baseline);
+}
+
+/* The loaded scenario, while nothing has been changed since. */
+.scenario[aria-pressed='true'] {
+  border-color: var(--route-alternative);
+  border-inline-start-width: 4px;
+}
+
+.scenario__name {
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.scenario__lane {
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Port search ───────────────────────────────────────────────────────── */
+
+.combo {
+  position: relative;
+}
+
+.combo > label {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-secondary);
+  margin-bottom: 4px;
+}
+
+.combo__input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+
+.combo__popup {
+  position: absolute;
+  z-index: 20;
+  inset-inline: 0;
+  top: calc(100% + 4px);
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--surface-raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.combo__group {
+  position: sticky;
+  top: 0;
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--ink-muted);
+  background: var(--surface-raised);
+}
+
+.combo__option {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.combo__option--active {
+  background: color-mix(in srgb, var(--route-baseline) 14%, transparent);
+}
+
+.combo__option[aria-selected='true'] {
+  font-weight: 600;
+}
+
+.combo__country {
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.combo__empty {
+  margin: 0;
+  padding: 10px;
+  font-size: 12.5px;
+  color: var(--ink-muted);
+}
+
+/* ── Chokepoint list ───────────────────────────────────────────────────── */
+
+.chokepoints {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.chokepoints--optin {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--grid);
+}
+
+.chokepoint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.chokepoint label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.chokepoint input {
+  accent-color: var(--status-critical);
+}
+
+.chokepoint__name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chokepoint--blocked .chokepoint__name {
+  color: var(--ink-muted);
+}
+
+.badge {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--grid);
+  color: var(--ink-secondary);
+}
+
+.badge--muted {
+  background: transparent;
+  border: 1px solid var(--grid);
+  color: var(--ink-muted);
+}
+
+.badge--accent {
+  background: color-mix(in oklab, var(--status-good) 18%, transparent);
+  color: var(--status-good);
+}
+
+/* ── Map chrome ────────────────────────────────────────────────────────── */
+
+.map__legend {
+  position: absolute;
+  inset-inline-start: 12px;
+  bottom: 22px;
+  z-index: 500;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 7px 11px;
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--surface) 88%, transparent);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(6px);
+  font-size: 11.5px;
+  color: var(--ink-secondary);
+}
+
+.legend__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend__swatch {
+  width: 16px;
+  height: 3px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.legend__swatch--baseline {
+  color: var(--route-baseline);
+}
+
+.legend__swatch--alternative {
+  color: var(--route-alternative);
+}
+
+.legend__swatch--adds,
+.legend__swatch--saves {
+  height: 10px;
+  width: 10px;
+  border-radius: 3px;
+}
+
+.legend__swatch--adds {
+  color: var(--adds-cost);
+}
+
+.legend__swatch--saves {
+  color: var(--saves-cost);
+}
+
+.legend__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.legend__dot--open {
+  color: var(--status-good);
+}
+
+.legend__dot--closed {
+  color: var(--status-critical);
+}
+
+.leaflet-container {
+  background: var(--surface);
+  font-family: var(--font);
+}
+
+/* ── Results ───────────────────────────────────────────────────────────── */
+
+.results__head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.results__head h2 {
+  font-size: 15px;
+}
+
+.notice {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--ink-muted);
+}
+
+.notice--warn {
+  color: var(--status-critical);
+}
+
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1px;
+  background: var(--grid);
+  border: 1px solid var(--grid);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.stat {
+  padding: 10px 12px;
+  background: var(--surface);
+}
+
+.stat--emphasis {
+  background: var(--surface-raised);
+}
+
+.stat__label {
+  display: block;
+  font-size: 11px;
+  color: var(--ink-muted);
+  margin-bottom: 2px;
+}
+
+.stat__value {
+  display: block;
+  font-size: 21px;
+  font-weight: 640;
+  letter-spacing: -0.02em;
+}
+
+.stat--emphasis .stat__value {
+  font-size: 25px;
+}
+
+.stat__value--up {
+  color: var(--adds-cost);
+}
+
+.stat-row--secondary .stat__value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink-secondary);
+}
+
+/* Signed bar chart: direction carries the sign, colour reinforces it. */
+
+.breakdown {
+  margin-bottom: 14px;
+}
+
+.breakdown__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.breakdown__head h3 {
+  font-size: 12px;
+  letter-spacing: 0;
+  color: var(--ink-muted);
+}
+
+.breakdown__legend {
+  display: flex;
+  gap: 12px;
+  font-size: 11.5px;
+  color: var(--ink-secondary);
+}
+
+.breakdown__legend span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.bars__row {
+  display: grid;
+  grid-template-columns: minmax(96px, 132px) 1fr minmax(88px, auto);
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+}
+
+.bars__label {
+  color: var(--ink-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bars__track {
+  display: flex;
+  align-items: center;
+  height: 14px;
+}
+
+.bars__half {
+  flex: 1;
+  display: flex;
+  height: 100%;
+}
+
+.bars__half--negative {
+  justify-content: flex-end;
+}
+
+.bars__zero {
+  width: 1px;
+  height: 100%;
+  background: var(--rule);
+  flex-shrink: 0;
+}
+
+.bars__fill {
+  height: 100%;
+  display: block;
+}
+
+.bars__fill--positive {
+  background: var(--adds-cost);
+  border-radius: 0 4px 4px 0;
+  margin-left: 2px;
+}
+
+.bars__fill--negative {
+  background: var(--saves-cost);
+  border-radius: 4px 0 0 4px;
+  margin-right: 2px;
+}
+
+.bars__value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.table-scroll {
+  overflow-x: auto;
+  margin-bottom: 12px;
+}
+
+.compare {
+  width: 100%;
+  min-width: 320px;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.compare th,
+.compare td {
+  text-align: end;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--grid);
+  font-variant-numeric: tabular-nums;
+}
+
+.compare thead th {
+  font-size: 11px;
+  letter-spacing: 0;
+  color: var(--ink-muted);
+  font-weight: 600;
+}
+
+.compare tbody th[scope='row'],
+.compare thead th:first-child {
+  text-align: start;
+  font-weight: 500;
+  color: var(--ink-secondary);
+}
+
+.compare {
+  margin-bottom: 0;
+}
+
+.compare__total th,
+.compare__total td {
+  border-bottom: none;
+  border-top: 1px solid var(--rule);
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.via {
+  display: grid;
+  gap: 6px;
+}
+
+.via__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.via__marker {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  align-self: center;
+}
+
+.via__marker--baseline {
+  background: var(--route-baseline);
+}
+
+.via__marker--alternative {
+  background: var(--route-alternative);
+}
+
+.via__label {
+  color: var(--ink-muted);
+}
+
+.via__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.via__none {
+  color: var(--ink-muted);
+}
+
+.chip {
+  font-size: 11.5px;
+  padding: 1.5px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--grid);
+  background: var(--surface-raised);
+}
+
+/* ── Modal ─────────────────────────────────────────────────────────────── */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.modal__card {
+  max-width: 620px;
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 22px 24px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.modal__card h2 {
+  font-size: 16px;
+  margin-bottom: 10px;
+}
+
+.modal__card p {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--ink-secondary);
+}
+
+.modal__caveat {
+  padding: 10px 12px;
+  border-inline-start: 3px solid var(--route-alternative);
+  background: var(--surface-raised);
+  border-start-end-radius: var(--radius-sm);
+  border-end-end-radius: var(--radius-sm);
+}
+
+/* ── Foldable control sections ─────────────────────────────────────────── */
+
+.field-group--foldable {
+  padding-block: 0;
+}
+
+.field-group--foldable > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-block: 14px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.field-group--foldable > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Chevron, rotated by the open state rather than swapped for another glyph. */
+.field-group--foldable > summary::after {
+  content: '';
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--ink-muted);
+  border-bottom: 2px solid var(--ink-muted);
+  transform: rotate(45deg) translate(-2px, -2px);
+  transition: transform 0.15s ease;
+}
+
+.field-group--foldable[open] > summary::after {
+  transform: rotate(-135deg) translate(-2px, -2px);
+}
+
+.field-group--foldable > summary h2 {
+  margin-bottom: 0;
+}
+
+.field-group--foldable > *:last-child {
+  margin-bottom: 14px;
+}
+
+.field-group--foldable > .field-group__actions {
+  margin-bottom: 10px;
+}
+
+.badge--count {
+  background: var(--status-critical);
+  color: #fff;
+}
+
+/* ── Narrow layouts ────────────────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(320px, 55vh) auto;
+    grid-template-areas:
+      'header'
+      'controls'
+      'map'
+      'results';
+    height: auto;
+    min-height: 100%;
+  }
+
+  .panel--controls,
+  .panel--results {
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+/* ── Phones ────────────────────────────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  body {
+    font-size: 13.5px;
+  }
+
+  .app {
+    grid-template-rows: auto auto minmax(260px, 46vh) auto;
+  }
+
+  /* Keep the header on one line so it costs 56px, not 90. */
+  .app__header {
+    padding: 8px 14px;
+    flex-wrap: nowrap;
+    gap: 10px;
+  }
+
+  .app__brand p {
+    display: none;
+  }
+
+  .app__brand {
+    gap: 9px;
+    min-width: 0;
+  }
+
+  .app__mark {
+    width: 22px;
+    height: 22px;
+  }
+
+  .app__brand h1 {
+    font-size: 15px;
+  }
+
+  .app__header-actions {
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .app__header-actions .button--ghost {
+    padding: 5px 8px;
+    font-size: 11.5px;
+  }
+
+  .lang__option {
+    padding: 4px 7px;
+    font-size: 11px;
+  }
+
+  .button--swap {
+    padding: 4px 10px;
+    margin-bottom: 8px;
+    font-size: 11.5px;
+  }
+
+  /* A folded summary shows its current value, so the badge carries real text. */
+  .badge {
+    max-width: 46%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .panel--controls {
+    padding: 8px 14px 20px;
+  }
+
+  .panel--results {
+    padding: 14px 14px 18px;
+  }
+
+  /* Four stat tiles side by side leave no room for the figures. */
+  .stat-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stat--emphasis .stat__value {
+    font-size: 22px;
+  }
+
+  .bars__row {
+    grid-template-columns: minmax(70px, 84px) 1fr minmax(74px, auto);
+    gap: 7px;
+    font-size: 11.5px;
+  }
+
+  .breakdown__head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .map__legend {
+    inset-inline-start: 8px;
+    bottom: 18px;
+    gap: 8px;
+    padding: 5px 8px;
+    font-size: 10.5px;
+  }
+
+  .via__row {
+    font-size: 11.5px;
+  }
+}
+
+/* ── Large desktops ────────────────────────────────────────────────────────
+ *
+ * The results panel spans the full width under the map, so on a wide screen its
+ * four stat tiles and three-column table stretch into mostly empty space. Two
+ * columns put the breakdown beside the table and give the map back its height.
+ */
+
+@media (min-width: 1600px) {
+  .app {
+    grid-template-columns: 400px minmax(0, 1fr);
+  }
+
+  .panel--results {
+    max-height: 38vh;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      'head head'
+      'stats stats2'
+      'bars table'
+      'via via';
+    column-gap: 28px;
+    align-content: start;
+  }
+
+  .results__head {
+    grid-area: head;
+  }
+
+  .stat-row--primary {
+    grid-area: stats;
+  }
+
+  .stat-row--secondary {
+    grid-area: stats2;
+  }
+
+  .breakdown {
+    grid-area: bars;
+  }
+
+  .table-scroll {
+    grid-area: table;
+  }
+
+  .via {
+    grid-area: via;
+  }
+}
+
+/* ── Very large and ultra-wide ─────────────────────────────────────────── */
+
+@media (min-width: 2100px) {
+  body {
+    font-size: 15px;
+  }
+
+  .app {
+    grid-template-columns: 440px minmax(0, 1fr);
+  }
+
+  .app__brand h1 {
+    font-size: 19px;
+  }
+
+  .stat__value {
+    font-size: 24px;
+  }
+
+  .stat--emphasis .stat__value {
+    font-size: 30px;
+  }
+
+  .panel--results {
+    /* Past this width the eye loses the row it is on, so the columns stop
+     * growing and centre instead. Capping the panel itself would expose the
+     * shell colour beside it. */
+    grid-template-columns: minmax(0, 1100px) minmax(0, 1100px);
+    justify-content: center;
+    padding: 20px 28px 24px;
+  }
+
+  .map__legend {
+    font-size: 13px;
+    padding: 9px 14px;
+  }
+}
+
+/* ── Right-to-left ─────────────────────────────────────────────────────────
+ *
+ * Arabic mirrors the shell, but two subtrees stay left-to-right on purpose:
+ * the map, whose axes are geographic rather than textual, and the signed bar
+ * chart, whose "saving on the left, cost on the right" reading is fixed by the
+ * legend beside it.
+ */
+
+[dir='rtl'] .map,
+[dir='rtl'] .bars {
+  direction: ltr;
+}
+
+/* The chart is LTR, so its labels need pushing back to Arabic reading order. */
+[dir='rtl'] .bars__label {
+  direction: rtl;
+  text-align: right;
+}
+
+[dir='rtl'] .field-group--foldable > summary::after {
+  margin-left: 0;
+  margin-right: auto;
+}
+
+[dir='rtl'] .app__mark {
+  transform: scaleX(-1);
+}
